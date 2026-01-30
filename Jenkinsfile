@@ -14,18 +14,17 @@ pipeline {
                 set +e
                 mkdir -p security-reports/trufflehog
 
+                # TruffleHog JSON report (REAL file)
                 trufflehog filesystem . --json \
                   > security-reports/trufflehog/trufflehog.json
 
+                # HTML report for Jenkins
                 echo "<html><body><h1>TruffleHog Report</h1><pre>" \
                   > security-reports/trufflehog/trufflehog.html
                 cat security-reports/trufflehog/trufflehog.json \
                   >> security-reports/trufflehog/trufflehog.html
                 echo "</pre></body></html>" \
                   >> security-reports/trufflehog/trufflehog.html
-
-                echo "===== TruffleHog JSON (first 50 lines) ====="
-                head -50 security-reports/trufflehog/trufflehog.json || true
                 '''
             }
         }
@@ -48,10 +47,8 @@ pipeline {
                   --disableNodeJS \
                   --disableYarnAudit
 
+                # Ensure report exists
                 test -f security-reports/dependency-check/dependency-check-report.json
-
-                echo "===== Dependency-Check JSON (first 50 lines) ====="
-                head -50 security-reports/dependency-check/dependency-check-report.json
                 '''
             }
         }
@@ -64,10 +61,9 @@ pipeline {
                 ]) {
                     sh '''
                     set -e
-
                     command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 
-                    echo "Finding or creating product..."
+                    echo "Finding or creating Product..."
                     PRODUCT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
                       "$DD_URL/api/v2/products/?name=$PRODUCT_NAME" \
                       | jq -r '.results[0].id')
@@ -83,7 +79,7 @@ pipeline {
 
                     echo "Product ID: $PRODUCT_ID"
 
-                    echo "Creating engagement..."
+                    echo "Creating Engagement..."
                     ENGAGEMENT_ID=$(curl -s -X POST \
                       -H "Authorization: Token $DD_API_KEY" \
                       -H "Content-Type: application/json" \
@@ -93,7 +89,7 @@ pipeline {
 
                     echo "Engagement ID: $ENGAGEMENT_ID"
 
-                    echo "Uploading Dependency-Check report to DefectDojo..."
+                    echo "Uploading Dependency-Check report..."
                     curl -s -X POST "$DD_URL/api/v2/import-scan/" \
                       -H "Authorization: Token $DD_API_KEY" \
                       -F "scan_type=Dependency Check Scan" \
@@ -103,7 +99,16 @@ pipeline {
                       -F "verified=false" \
                       -F "close_old_findings=true"
 
-                    echo "DefectDojo upload completed successfully."
+                    echo "Uploading TruffleHog report..."
+                    curl -s -X POST "$DD_URL/api/v2/import-scan/" \
+                      -H "Authorization: Token $DD_API_KEY" \
+                      -F "scan_type=Trufflehog Scan" \
+                      -F "file=@security-reports/trufflehog/trufflehog.json" \
+                      -F "engagement=$ENGAGEMENT_ID" \
+                      -F "active=true" \
+                      -F "verified=false"
+
+                    echo "All reports uploaded to DefectDojo successfully."
                     '''
                 }
             }
