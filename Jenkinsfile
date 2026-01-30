@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        PRODUCT_NAME = "Jenkins-CICD-App"
+        PRODUCT_NAME    = "Jenkins-CICD-App"
         ENGAGEMENT_NAME = "CI Scan"
     }
 
@@ -41,8 +41,12 @@ pipeline {
                   -v "$WORKSPACE/security-reports/dependency-check:/report" \
                   owasp/dependency-check:latest \
                   --scan /src \
-                  --format JSON,HTML \
-                  --out /report
+                  --format ALL \
+                  --out /report \
+                  --disableCentral \
+                  --disableOssIndex \
+                  --disableNodeJS \
+                  --disableYarnAudit
 
                 test -f security-reports/dependency-check/dependency-check-report.json
 
@@ -65,14 +69,16 @@ pipeline {
 
                     echo "Finding or creating product..."
                     PRODUCT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
-                      "$DD_URL/api/v2/products/?name=$PRODUCT_NAME" | jq -r '.results[0].id')
+                      "$DD_URL/api/v2/products/?name=$PRODUCT_NAME" \
+                      | jq -r '.results[0].id')
 
-                    if [ "$PRODUCT_ID" = "null" ] || [ -z "$PRODUCT_ID" ]; then
+                    if [ -z "$PRODUCT_ID" ] || [ "$PRODUCT_ID" = "null" ]; then
                       PRODUCT_ID=$(curl -s -X POST \
                         -H "Authorization: Token $DD_API_KEY" \
                         -H "Content-Type: application/json" \
                         -d "{\"name\":\"$PRODUCT_NAME\",\"prod_type\":1}" \
-                        "$DD_URL/api/v2/products/" | jq -r '.id')
+                        "$DD_URL/api/v2/products/" \
+                        | jq -r '.id')
                     fi
 
                     echo "Product ID: $PRODUCT_ID"
@@ -82,11 +88,12 @@ pipeline {
                       -H "Authorization: Token $DD_API_KEY" \
                       -H "Content-Type: application/json" \
                       -d "{\"name\":\"$ENGAGEMENT_NAME\",\"product\":$PRODUCT_ID,\"engagement_type\":\"CI/CD\",\"status\":\"In Progress\"}" \
-                      "$DD_URL/api/v2/engagements/" | jq -r '.id')
+                      "$DD_URL/api/v2/engagements/" \
+                      | jq -r '.id')
 
                     echo "Engagement ID: $ENGAGEMENT_ID"
 
-                    echo "Uploading Dependency-Check report..."
+                    echo "Uploading Dependency-Check report to DefectDojo..."
                     curl -s -X POST "$DD_URL/api/v2/import-scan/" \
                       -H "Authorization: Token $DD_API_KEY" \
                       -F "scan_type=Dependency Check Scan" \
@@ -96,7 +103,7 @@ pipeline {
                       -F "verified=false" \
                       -F "close_old_findings=true"
 
-                    echo "DefectDojo upload successful."
+                    echo "DefectDojo upload completed successfully."
                     '''
                 }
             }
