@@ -43,6 +43,51 @@ pipeline {
             }
         }
 
+
+
+stage('Upload to DefectDojo') {
+    steps {
+        withCredentials([
+            string(credentialsId: 'DEFECTDOJO_API_KEY', variable: 'DD_API_KEY'),
+            string(credentialsId: 'DEFECTDOJO_URL', variable: 'DD_URL')
+        ]) {
+            sh '''
+            set -e
+
+            echo "Creating product (if not exists)..."
+            PRODUCT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"Jenkins-CICD-App","description":"Created by Jenkins","prod_type":1}' \
+              $DD_URL/api/v2/products/ | jq -r '.id')
+
+            echo "Product ID: $PRODUCT_ID"
+
+            echo "Creating engagement..."
+            ENGAGEMENT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"CI Scan\",\"product\":$PRODUCT_ID,\"status\":\"In Progress\",\"engagement_type\":\"CI/CD\"}" \
+              $DD_URL/api/v2/engagements/ | jq -r '.id')
+
+            echo "Engagement ID: $ENGAGEMENT_ID"
+
+            echo "Uploading Dependency-Check report..."
+            curl -X POST "$DD_URL/api/v2/import-scan/" \
+              -H "Authorization: Token $DD_API_KEY" \
+              -F "scan_type=Dependency Check Scan" \
+              -F "file=@security-reports/dependency-check/dependency-check-report.json" \
+              -F "engagement=$ENGAGEMENT_ID" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true"
+
+            echo "Upload complete."
+            '''
+        }
+    }
+}
+
+
+        
         stage('Build') {
             steps {
                 sh 'mvn clean package'
