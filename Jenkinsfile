@@ -7,15 +7,19 @@ pipeline {
             steps {
                 sh '''
                 mkdir -p security-reports/trufflehog
-                trufflehog filesystem . --json > security-reports/trufflehog/trufflehog.json || true
 
-                # Simple HTML wrapper
+                trufflehog filesystem . --json \
+                  > security-reports/trufflehog/trufflehog.json || true
+
                 echo "<html><body><h1>TruffleHog Report</h1><pre>" \
                   > security-reports/trufflehog/trufflehog.html
                 cat security-reports/trufflehog/trufflehog.json \
                   >> security-reports/trufflehog/trufflehog.html
                 echo "</pre></body></html>" \
                   >> security-reports/trufflehog/trufflehog.html
+
+                echo "===== TruffleHog JSON Report (first 200 lines) ====="
+                head -200 security-reports/trufflehog/trufflehog.json || true
                 '''
             }
         }
@@ -25,17 +29,16 @@ pipeline {
                 sh '''
                 mkdir -p security-reports/dependency-check
 
-                rm -f owasp-dependency-check.sh
-                wget https://raw.githubusercontent.com/devopssecure/webapp/master/owasp-dependency-check.sh
-                chmod +x owasp-dependency-check.sh
-
                 docker run --rm \
                   -v "$WORKSPACE:/src" \
                   -v "$WORKSPACE/security-reports/dependency-check:/report" \
                   owasp/dependency-check:latest \
                   --scan /src \
-                  --format HTML \
+                  --format ALL \
                   --out /report
+
+                echo "===== Dependency-Check JSON Report (first 200 lines) ====="
+                head -200 security-reports/dependency-check/dependency-check-report.json || true
                 '''
             }
         }
@@ -58,9 +61,9 @@ pipeline {
             }
         }
 
-        stage('Archive Security Reports') {
+        stage('Archive Reports') {
             steps {
-                archiveArtifacts artifacts: 'security-reports/**', fingerprint: true
+                archiveArtifacts artifacts: 'security-reports/**'
             }
         }
     }
