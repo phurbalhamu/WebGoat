@@ -1,15 +1,21 @@
 pipeline {
     agent any
 
+    environment {
+        PRODUCT_NAME = "Jenkins-CICD-App"
+        ENGAGEMENT_NAME = "CI Scan"
+    }
+
     stages {
 
         stage('Secret Scan') {
             steps {
                 sh '''
+                set +e
                 mkdir -p security-reports/trufflehog
 
                 trufflehog filesystem . --json \
-                  > security-reports/trufflehog/trufflehog.json || true
+                  > security-reports/trufflehog/trufflehog.json
 
                 echo "<html><body><h1>TruffleHog Report</h1><pre>" \
                   > security-reports/trufflehog/trufflehog.html
@@ -18,8 +24,8 @@ pipeline {
                 echo "</pre></body></html>" \
                   >> security-reports/trufflehog/trufflehog.html
 
-                echo "===== TruffleHog JSON Report (first 200 lines) ====="
-                head -200 security-reports/trufflehog/trufflehog.json || true
+                echo "===== TruffleHog JSON (first 50 lines) ====="
+                head -50 security-reports/trufflehog/trufflehog.json || true
                 '''
             }
         }
@@ -27,6 +33,7 @@ pipeline {
         stage('Source-Composition-Analysis') {
             steps {
                 sh '''
+                set -e
                 mkdir -p security-reports/dependency-check
 
                 docker run --rm \
@@ -34,60 +41,67 @@ pipeline {
                   -v "$WORKSPACE/security-reports/dependency-check:/report" \
                   owasp/dependency-check:latest \
                   --scan /src \
-                  --format ALL \
+                  --format JSON,HTML \
                   --out /report
 
-                echo "===== Dependency-Check JSON Report (first 200 lines) ====="
-                head -200 security-reports/dependency-check/dependency-check-report.json || true
+                test -f security-reports/dependency-check/dependency-check-report.json
+
+                echo "===== Dependency-Check JSON (first 50 lines) ====="
+                head -50 security-reports/dependency-check/dependency-check-report.json
                 '''
             }
         }
 
+        stage('Upload to DefectDojo') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'DEFECTDOJO_API_KEY', variable: 'DD_API_KEY'),
+                    string(credentialsId: 'DEFECTDOJO_URL', variable: 'DD_URL')
+                ]) {
+                    sh '''
+                    set -e
 
+                    command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 
-stage('Upload to DefectDojo') {
-    steps {
-        withCredentials([
-            string(credentialsId: 'DEFECTDOJO_API_KEY', variable: 'DD_API_KEY'),
-            string(credentialsId: 'DEFECTDOJO_URL', variable: 'DD_URL')
-        ]) {
-            sh '''
-            set -e
+                    echo "Finding or creating product..."
+                    PRODUCT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
+                      "$DD_URL/api/v2/products/?name=$PRODUCT_NAME" | jq -r '.results[0].id')
 
-            echo "Creating product (if not exists)..."
-            PRODUCT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{"name":"Jenkins-CICD-App","description":"Created by Jenkins","prod_type":1}' \
-              $DD_URL/api/v2/products/ | jq -r '.id')
+                    if [ "$PRODUCT_ID" = "null" ] || [ -z "$PRODUCT_ID" ]; then
+                      PRODUCT_ID=$(curl -s -X POST \
+                        -H "Authorization: Token $DD_API_KEY" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"name\":\"$PRODUCT_NAME\",\"prod_type\":1}" \
+                        "$DD_URL/api/v2/products/" | jq -r '.id')
+                    fi
 
-            echo "Product ID: $PRODUCT_ID"
+                    echo "Product ID: $PRODUCT_ID"
 
-            echo "Creating engagement..."
-            ENGAGEMENT_ID=$(curl -s -H "Authorization: Token $DD_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{\"name\":\"CI Scan\",\"product\":$PRODUCT_ID,\"status\":\"In Progress\",\"engagement_type\":\"CI/CD\"}" \
-              $DD_URL/api/v2/engagements/ | jq -r '.id')
+                    echo "Creating engagement..."
+                    ENGAGEMENT_ID=$(curl -s -X POST \
+                      -H "Authorization: Token $DD_API_KEY" \
+                      -H "Content-Type: application/json" \
+                      -d "{\"name\":\"$ENGAGEMENT_NAME\",\"product\":$PRODUCT_ID,\"engagement_type\":\"CI/CD\",\"status\":\"In Progress\"}" \
+                      "$DD_URL/api/v2/engagements/" | jq -r '.id')
 
-            echo "Engagement ID: $ENGAGEMENT_ID"
+                    echo "Engagement ID: $ENGAGEMENT_ID"
 
-            echo "Uploading Dependency-Check report..."
-            curl -X POST "$DD_URL/api/v2/import-scan/" \
-              -H "Authorization: Token $DD_API_KEY" \
-              -F "scan_type=Dependency Check Scan" \
-              -F "file=@security-reports/dependency-check/dependency-check-report.json" \
-              -F "engagement=$ENGAGEMENT_ID" \
-              -F "active=true" \
-              -F "verified=false" \
-              -F "close_old_findings=true"
+                    echo "Uploading Dependency-Check report..."
+                    curl -s -X POST "$DD_URL/api/v2/import-scan/" \
+                      -H "Authorization: Token $DD_API_KEY" \
+                      -F "scan_type=Dependency Check Scan" \
+                      -F "file=@security-reports/dependency-check/dependency-check-report.json" \
+                      -F "engagement=$ENGAGEMENT_ID" \
+                      -F "active=true" \
+                      -F "verified=false" \
+                      -F "close_old_findings=true"
 
-            echo "Upload complete."
-            '''
+                    echo "DefectDojo upload successful."
+                    '''
+                }
+            }
         }
-    }
-}
 
-
-        
         stage('Build') {
             steps {
                 sh 'mvn clean package'
@@ -108,7 +122,7 @@ stage('Upload to DefectDojo') {
 
         stage('Archive Reports') {
             steps {
-                archiveArtifacts artifacts: 'security-reports/**'
+                archiveArtifacts artifacts: 'security-reports/**', fingerprint: true
             }
         }
     }
